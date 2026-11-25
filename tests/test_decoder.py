@@ -154,15 +154,17 @@ def test_cuda(corpus):
 
 @pytest.mark.parametrize("current", [1024, 16384, 32768])
 def test_cuda_thread_stack(current):
-    from opus_gpu._cuda import _ensure_decoder_stack
+    from opus_gpu._cuda import _ensure_stack
 
     runtime = Mock()
     runtime.cudaLimitStackSize = 0
     runtime.deviceGetLimit.return_value = current
-    _ensure_decoder_stack(runtime)
+    _ensure_stack(runtime)
     runtime.deviceGetLimit.assert_called_once_with(runtime.cudaLimitStackSize)
     if current < 16384:
-        runtime.deviceSetLimit.assert_called_once_with(runtime.cudaLimitStackSize, 16384)
+        runtime.deviceSetLimit.assert_called_once_with(
+            runtime.cudaLimitStackSize, 16384
+        )
     else:
         runtime.deviceSetLimit.assert_not_called()
 
@@ -190,3 +192,42 @@ def test_prefetch_preserves_order_and_bounds(corpus, monkeypatch):
     assert len(consumed) == 6
     assert [p for p, _ in [first, *results]] == paths
     assert max(map(len, launched)) == 3
+
+
+@pytest.mark.parametrize("cause", ["low_free_memory", "allocation_failure"])
+def test_cuda_subdivides_and_preserves_pcm_order(corpus, monkeypatch, cause):
+    import sys
+    from opus_gpu import _cuda
+
+    paths = [p for p, _ in corpus]
+    streams = [read_stream(p) for p in paths]
+    cp = Mock()
+    cp.cuda.runtime.deviceGetLimit.return_value = 16384
+    cp.cuda.runtime.memGetInfo.return_value = (
+        1 if cause == "low_free_memory" else 2**40,
+        2**40,
+    )
+    cp.cuda.memory.OutOfMemoryError = MemoryError
+    monkeypatch.setitem(sys.modules, "cupy", cp)
+    monkeypatch.setattr(_cuda, "_module", lambda device: (object(), 146592, 48))
+    calls = []
+
+    class Output(np.ndarray):
+        def get(self):
+            return self.copy()
+
+    def launch(cp, module, stride, sms, batch, inputs):
+        calls.append(len(inputs))
+        if cause == "allocation_failure" and len(inputs) > 1:
+            raise MemoryError
+        assert len(inputs) == 1
+        s = batch[0]
+        data = np.full(s.frames * s.channels, paths.index(inputs[0]), dtype=np.int16)
+        return data.view(Output), [0, data.size]
+
+    monkeypatch.setattr(_cuda, "_launch_decode", launch)
+    arrays = list(_cuda.decode_group(streams, paths))
+    assert calls.count(1) == len(paths)
+    for i, (pcm, s) in enumerate(zip(arrays, streams, strict=True)):
+        assert pcm.shape == (s.end - s.skip, s.channels)
+        assert np.all(pcm == i)

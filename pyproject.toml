@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "opus-gpu"
 version = "0.1.0"
-description = "Batched Opus audio decoding for CPU and NVIDIA CUDA"
+description = "Batched Opus audio encoding and decoding on NVIDIA CUDA"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["av>=14", "numpy>=1.23"]
@@ -17,4 +17,4 @@ cuda12 = ["cupy-cuda12x>=13"]
 packages = ["opus_gpu"]
 
 [tool.setuptools.package-data]
-opus_gpu = ["decoder.ptx.gz", "OPUS-LICENSE.txt"]
+opus_gpu = ["decoder.ptx.gz", "encoder.ptx.gz", "OPUS-LICENSE.txt"]

@@ -21,12 +21,12 @@ def sources(tree, filename, group):
     return [tree / path for path in value.split()]
 
 
-def adapt_controls(tree):
+def adapt_controls(tree, codec):
     # PTX device functions take fixed arguments. All decoder controls used here
     # take zero or one integer/pointer, so carry that operand in a uintptr_t.
     for header, source, name in [
-        ("include/opus.h", "src/opus_decoder.c", "opus_decoder_ctl"),
-        ("include/opus_custom.h", "celt/celt_decoder.c", "opus_custom_decoder_ctl"),
+        ("include/opus.h", f"src/opus_{codec}.c", f"opus_{codec}_ctl"),
+        ("include/opus_custom.h", f"celt/celt_{codec}.c", f"opus_custom_{codec}_ctl"),
     ]:
         for item in (header, source):
             path = tree / item
@@ -53,13 +53,15 @@ def adapt_controls(tree):
             path.write_text(code)
 
 
-def build(archive, tools, output, work):
+def build(archive, tools, output, work, codec="decoder"):
     if hashlib.sha256(archive.read_bytes()).hexdigest() != SHA256:
         raise ValueError("expected the official opus-1.5.2.tar.gz release")
     with tarfile.open(archive) as tar:
         tar.extractall(work, filter="data")
     tree = work / "opus-1.5.2"
-    adapt_controls(tree)
+    adapt_controls(tree, codec)
+    if codec == "encoder":
+        adapt_controls(tree, "decoder")
     stack = tree / "celt/stack_alloc.h"
     code = re.sub(
         r"#ifdef CELT_C.*?#endif /\* CELT_C \*/",
@@ -104,16 +106,19 @@ def build(archive, tools, output, work):
     ]
     files = [
         tree / "src/opus.c",
-        tree / "src/opus_decoder.c",
+        tree / f"src/opus_{codec}.c",
         tree / "src/extensions.c",
-        HERE / "decode.c",
+        HERE / ("encode.c" if codec == "encoder" else "decode.c"),
         HERE / "memory.c",
     ]
+    if codec == "encoder":
+        files += sources(tree, "silk_sources.mk", "SILK_SOURCES_FIXED")
+        files.extend([tree / "src/repacketizer.c", tree / "src/opus_decoder.c"])
     files += sources(tree, "silk_sources.mk", "SILK_SOURCES")
     files += [
         p
         for p in sources(tree, "celt_sources.mk", "CELT_SOURCES")
-        if p.stem != "celt_encoder"
+        if p.stem != ("celt_decoder" if codec == "encoder" else "celt_encoder")
     ]
 
     def compile_one(path):
@@ -123,6 +128,11 @@ def build(archive, tools, output, work):
 
     with ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 1)) as pool:
         objects = list(pool.map(compile_one, files))
+    entries = (
+        ("encode_streams", "encoder_size")
+        if codec == "encoder"
+        else ("decode_streams", "decoder_size")
+    )
     linked = work / "linked.bc"
     optimized = work / "optimized.ll"
     subprocess.run([tools / "llvm-link", *objects, "-o", linked], check=True)
@@ -131,7 +141,7 @@ def build(archive, tools, output, work):
             tools / "opt",
             "-enable-new-pm=0",
             "-internalize",
-            "-internalize-public-api-list=decode_streams,decoder_size",
+            "-internalize-public-api-list=" + ",".join(entries),
             "-globaldce",
             "-O2",
             "-S",
@@ -143,7 +153,7 @@ def build(archive, tools, output, work):
     )
     # LLVM's PTX backend uses this calling convention for CUDA launch entries.
     ir = re.sub(
-        r"define (\w+ )*void @(decode_streams|decoder_size)\(",
+        r"define (\w+ )*void @(" + "|".join(entries) + r")\(",
         r"define ptx_kernel void @\2(",
         optimized.read_text(),
     )
@@ -151,7 +161,9 @@ def build(archive, tools, output, work):
     ptx = subprocess.check_output(
         [tools / "llc", "-mcpu=sm_86", "-mattr=+ptx75", optimized, "-o", "-"]
     )
-    for name in (b"decode_streams", b"decoder_size"):
+    if b".extern .func" in ptx:
+        raise RuntimeError("unresolved device function in PTX")
+    for name in map(str.encode, entries):
         if b".entry " + name + b"(" not in ptx:
             raise RuntimeError(f"missing CUDA entry {name!r}")
     output.write_bytes(gzip.compress(ptx, mtime=0))
@@ -161,9 +173,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive", type=Path)
     parser.add_argument("--llvm-bin", type=Path, required=True)
-    parser.add_argument(
-        "--output", type=Path, default=HERE.parent / "opus_gpu/decoder.ptx.gz"
-    )
+    parser.add_argument("--codec", choices=("decoder", "encoder"), default="decoder")
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     with TemporaryDirectory() as directory:
-        build(args.archive, args.llvm_bin.resolve(), args.output, Path(directory))
+        build(
+            args.archive,
+            args.llvm_bin.resolve(),
+            args.output or HERE.parent / f"opus_gpu/{args.codec}.ptx.gz",
+            Path(directory),
+            args.codec,
+        )

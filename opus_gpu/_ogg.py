@@ -5,17 +5,17 @@ from pathlib import Path
 import struct
 import zlib
 
+import numpy as np
+
 
 # Ogg uses the non-reflected CRC-32 polynomial, with an initial value of zero.
 _REVERSE = bytes(int(f"{n:08b}"[::-1], 2) for n in range(256))
 
 
-def _valid_crc(page, expected):
+def _page_crc(page):
     data = (page[:22] + b"\0" * 4 + page[26:]).translate(_REVERSE)
     crc = zlib.crc32(data, 0xFFFFFFFF) ^ 0xFFFFFFFF
-    return (
-        int.from_bytes(crc.to_bytes(4, "little").translate(_REVERSE), "big") == expected
-    )
+    return int.from_bytes(crc.to_bytes(4, "little").translate(_REVERSE), "big")
 
 
 def _packet_frames(packet):
@@ -41,7 +41,8 @@ def _packet_frames(packet):
 
 @dataclass
 class Stream:
-    packets: list[bytes]
+    data: bytes
+    packet_sizes: np.ndarray
     channels: int
     gain: int
     frames: int
@@ -72,7 +73,7 @@ def _parse(raw):
         start = pos + 27 + segments
         lacing = raw[pos + 27 : start]
         end = start + sum(lacing)
-        if end > len(raw) or not _valid_crc(raw[pos:end], crc):
+        if end > len(raw) or _page_crc(raw[pos:end]) != crc:
             raise ValueError("truncated Ogg page or invalid checksum")
         if serial is None:
             if not flags & 2:
@@ -122,5 +123,13 @@ def _parse(raw):
             stop = granule - origin
             if not max(skip, previous) <= stop <= frames:
                 raise ValueError("invalid final Ogg granule position")
-            return Stream(packets, channels, gain, frames, skip, stop)
+            return Stream(
+                b"".join(packets),
+                np.fromiter(map(len, packets), dtype=np.uint32, count=len(packets)),
+                channels,
+                gain,
+                frames,
+                skip,
+                stop,
+            )
     raise ValueError("missing Ogg end of stream")

@@ -9,9 +9,10 @@ import av
 import numpy as np
 
 from ._ogg import read_stream
+from ._encode import encode, encode_many
 
 SAMPLE_RATE = 48000
-__all__ = ["SAMPLE_RATE", "decode", "decode_many"]
+__all__ = ["SAMPLE_RATE", "decode", "decode_many", "encode", "encode_many"]
 
 
 def _decode_cpu(path):
@@ -69,6 +70,8 @@ def decode_many(paths, *, backend="cpu", workers=None, batch_size=64):
             if hasattr(os, "sched_getaffinity")
             else os.cpu_count() or 1,
         )
+    if backend == "cuda":
+        batch_size = min(batch_size, 2048)
     source = map(Path, paths)
     groups = iter(lambda: list(islice(source, batch_size)), [])
     with ThreadPoolExecutor(max_workers=workers) as pool:
