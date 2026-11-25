@@ -55,8 +55,13 @@ def main():
     )
     parser.add_argument("--files", type=int, default=256)
     parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument(
+        "--cpu-workers", type=int, default=4, help="workers for the CPU backend"
+    )
     parser.add_argument("--backend", choices=("cpu", "cuda", "both"), default="both")
     args = parser.parse_args()
+    if args.cpu_workers < 1:
+        parser.error("--cpu-workers must be positive")
     if args.files < 4 or args.files % 4 or args.batch_size < 1:
         parser.error("use a positive batch size and a positive multiple of four files")
     with TemporaryDirectory(prefix="opus-durations-") as tmp:
@@ -67,8 +72,9 @@ def main():
             for backend in (
                 ("cpu", "cuda") if args.backend == "both" else (args.backend,)
             ):
+                workers = args.cpu_workers if backend == "cpu" else 4
                 print(
-                    f"{seconds}s clips, {args.files} files, batch {args.batch_size}, {backend}",
+                    f"{seconds}s clips, {args.files} files, batch {args.batch_size}, {backend}, workers={workers}",
                     flush=True,
                 )
                 command = [
@@ -79,7 +85,7 @@ def main():
                     "--backend",
                     backend,
                     "--workers",
-                    "4",
+                    str(workers),
                     "--batch-size",
                     str(args.batch_size),
                 ]

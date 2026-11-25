@@ -60,6 +60,22 @@ The packaged kernel targets `sm_86` PTX. It has been assembled offline for SM 8.
 
 ### Effect of clip duration
 
+### Single-thread CPU baseline
+
+The CPU decoder ran with one worker. Linux CPU affinity restricted the process and all its threads to logical CPU 3 on the i7-11700K. Each row covers 256 files of the specified length with a batch size of 256. The RTX 5080 column reuses the earlier CUDA measurements with four host workers. The 1 s CUDA timing includes first use of the rebuilt kernel.
+
+| Clip duration | CPU, 1 thread | CUDA wall time | CPU RTF | CUDA RTF | CPU time / CUDA time |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 s | 0.655 s | 11.279 s | 0.002559 | 0.044059 | 0.06× |
+| 10 s | 5.490 s | 3.091 s | 0.002145 | 0.001207 | 1.78× |
+| 60 s | 32.855 s | 15.330 s | 0.002139 | 0.000998 | 2.14× |
+
+```bash
+taskset -c 3 python benchmarks/compare_durations.py --backend cpu --cpu-workers 1
+```
+
+### Four-worker CPU baseline
+
 One end-to-end run per backend and duration on an NVIDIA GeForce RTX 5080 and an Intel Core i7-11700K. Each run decoded 256 files in one requested batch of 256 with four host workers. The corpus contained 64 copies of each of four synthetic Opus profiles, generated at exactly the duration shown. Timing includes reading files and returning 48 kHz PCM to host memory. WAV output was disabled.
 
 | Clip duration | CPU wall time | CUDA wall time | CPU RTF | CUDA RTF | CPU files/s | CUDA files/s | CPU time / CUDA time |
