@@ -32,6 +32,19 @@ python -m opus_gpu.encode_wav ./wav --output ./encoded --batch-size 64 --bitrate
 
 In Python, `encode(pcm)` returns Ogg Opus bytes and `encode_many(arrays)` yields one byte string per input in order. Set `bitrate` in bits/second and `complexity` from 0 to 10. The encoder splits batches if CUDA runs low on memory. The fixed-point libopus encoder runs on CUDA. The host handles WAV input and Ogg framing.
 
+## Keep PCM on the GPU
+
+```python
+from opus_gpu import decode_many, encode_many
+
+decoded = decode_many(paths, backend="cuda", output="cupy", batch_size=64)
+for ogg in encode_many((pcm for _, pcm in decoded), batch_size=64):
+    # ogg contains the encoded Ogg Opus bytes.
+    ...
+```
+
+CuPy PCM stays on the active CUDA device, including while the encoder packs and pads its batch. The decoder returns views into its batch allocation. Consume them as a stream to limit retained GPU memory. Encoded packets return to the host for Ogg framing. For a WAV-based encoder benchmark, load the PCM into host RAM before timing to exclude disk reads.
+
 ## Python
 
 ```python

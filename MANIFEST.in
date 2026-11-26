@@ -1,2 +1,2 @@
 recursive-include native *.py *.c *.h
-include benchmarks/compare_durations.py
+include benchmarks/compare_durations.py benchmarks/compare_batches.py

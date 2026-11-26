@@ -44,23 +44,27 @@ def _decode_cpu(path):
     )
 
 
-def decode(path, *, backend="cpu"):
+def decode(path, *, backend="cpu", output="numpy"):
     """Decode one file. Use decode_many to share CUDA launches across files."""
+    if output != "numpy" and (output != "cupy" or backend != "cuda"):
+        raise ValueError("output must be numpy, or cupy with the CUDA backend")
     if backend == "cpu":
         return _decode_cpu(path)
     if backend == "cuda":
         from ._cuda import decode_group
 
-        return next(decode_group([read_stream(path)], [path]))
+        return next(decode_group([read_stream(path)], [path], output=output))
     raise ValueError("backend must be 'cpu' or 'cuda'")
 
 
-def decode_many(paths, *, backend="cpu", workers=None, batch_size=64):
+def decode_many(paths, *, backend="cpu", workers=None, batch_size=64, output="numpy"):
     """Yield (path, PCM) in input order. CUDA prefetches one compressed group."""
     if isinstance(paths, (str, bytes, os.PathLike)):
         raise TypeError("paths must be an iterable of paths")
     if backend not in ("cpu", "cuda"):
         raise ValueError("backend must be 'cpu' or 'cuda'")
+    if output != "numpy" and (output != "cupy" or backend != "cuda"):
+        raise ValueError("output must be numpy, or cupy with the CUDA backend")
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
     if workers is None:
@@ -88,5 +92,6 @@ def decode_many(paths, *, backend="cpu", workers=None, batch_size=64):
             streams = list(pending)
             following = next(groups, [])
             pending = pool.map(read_stream, following)
-            yield from zip(group, decode_group(streams, group))
+            kwargs = {"output": output} if output == "cupy" else {}
+            yield from zip(group, decode_group(streams, group, **kwargs))
             group = following

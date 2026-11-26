@@ -64,6 +64,11 @@ def test_cuda_encoder(tmp_path):
         assert stream.end - stream.skip == len(pcm)
         path = tmp_path / f"{i}.opus"
         path.write_bytes(blob)
+        device_pcm = decode(path, backend="cuda", output="cupy")
+        assert isinstance(device_pcm, cp.ndarray)
+        assert device_pcm.shape == pcm.shape
+        device_stream = _parse(encode(device_pcm))
+        assert device_stream.end - device_stream.skip == len(pcm)
         if len(pcm):
             reference = decode(path)
             assert reference.shape == pcm.shape

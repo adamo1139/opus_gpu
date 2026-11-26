@@ -20,17 +20,23 @@ def _page(serial, sequence, flags, granule, packets):
         full, rest = divmod(len(packet), 255)
         laces.extend(b"\xff" * full)
         laces.append(rest)
+    return _page_from_payload(
+        serial, sequence, flags, granule, laces, b"".join(packets)
+    )
+
+
+def _page_from_payload(serial, sequence, flags, granule, laces, payload):
     header = struct.pack(
         "<4sBBQIIIB", b"OggS", 0, flags, granule, serial, sequence, 0, len(laces)
     )
     page = bytearray(header)
     page.extend(laces)
-    page.extend(b"".join(packets))
+    page.extend(payload)
     struct.pack_into("<I", page, 22, _page_crc(page))
     return page
 
 
-def _mux(packets, frames, channels):
+def _mux(packets, frames, channels, sizes=None):
     serial = secrets.randbits(32)
     header = struct.pack("<8sBBHIhB", b"OpusHead", 1, channels, _SKIP, 48000, 0, 0)
     vendor = b"opus_gpu"
@@ -42,16 +48,40 @@ def _mux(packets, frames, channels):
         end = min(start + 40, len(packets))
         last = end == len(packets)
         granule = _SKIP + frames if last else end * _FRAME
-        result.extend(
-            _page(
-                serial, 2 + start // 40, 4 if last else 0, granule, packets[start:end]
+        sequence = 2 + start // 40
+        flags = 4 if last else 0
+        if sizes is not None and np.all(sizes[start:end] == packets.shape[1]):
+            full, rest = divmod(packets.shape[1], 255)
+            laces = (b"\xff" * full + bytes([rest])) * (end - start)
+            result.extend(
+                _page_from_payload(
+                    serial,
+                    sequence,
+                    flags,
+                    granule,
+                    laces,
+                    memoryview(packets[start:end]).cast("B"),
+                )
             )
-        )
+        else:
+            parts = (
+                packets[start:end]
+                if sizes is None
+                else [memoryview(packets[j, : sizes[j]]) for j in range(start, end)]
+            )
+            result.extend(_page(serial, sequence, flags, granule, parts))
     return bytes(result)
 
 
 def _pcm_array(pcm):
-    pcm = np.asarray(pcm)
+    if hasattr(pcm, "__cuda_array_interface__"):
+        import cupy as cp
+
+        pcm = cp.asarray(pcm)
+        if pcm.device.id != cp.cuda.runtime.getDevice():
+            raise ValueError("PCM must be on the active CUDA device")
+    else:
+        pcm = np.asarray(pcm)
     if pcm.ndim == 1:
         pcm = pcm[:, None]
     if pcm.dtype != np.int16 or pcm.ndim != 2 or pcm.shape[1] not in (1, 2):
@@ -97,11 +127,8 @@ def _encode_group(group, bitrate, complexity):
                 ) from error
         else:
             for i, pcm in enumerate(group):
-                parts = [
-                    memoryview(data[j, : sizes[j]])
-                    for j in range(starts[i], starts[i + 1])
-                ]
-                yield _mux(parts, len(pcm), channels[i])
+                start, end = starts[i : i + 2]
+                yield _mux(data[start:end], len(pcm), channels[i], sizes[start:end])
 
             return
     mid = count // 2
@@ -123,9 +150,13 @@ def _launch_encode(
     offsets,
 ):
     count = len(group)
-    padded = np.zeros(offsets[-1], dtype=np.int16)
+    on_device = any(hasattr(pcm, "__cuda_array_interface__") for pcm in group)
+    xp = cp if on_device else np
+    padded = xp.zeros(offsets[-1], dtype=np.int16)
     for i, pcm in enumerate(group):
-        padded[offsets[i] : offsets[i] + pcm.size].reshape(pcm.shape)[:] = pcm
+        padded[offsets[i] : offsets[i] + pcm.size].reshape(pcm.shape)[:] = xp.asarray(
+            pcm
+        )
     packets = cp.empty((starts[-1], capacity), dtype=cp.uint8)
     lengths = cp.empty(starts[-1], dtype=cp.int32)
     errors = cp.empty(count, dtype=cp.int32)
@@ -155,7 +186,7 @@ def _launch_encode(
 
 
 def encode_many(inputs, *, bitrate=64000, complexity=5, batch_size=64):
-    """Yield one Ogg Opus byte string per 48 kHz int16 PCM array, in order."""
+    """Yield one Ogg Opus byte string per 48 kHz NumPy or CuPy int16 PCM array, in order."""
     bitrate, complexity, batch_size = map(
         operator.index, (bitrate, complexity, batch_size)
     )

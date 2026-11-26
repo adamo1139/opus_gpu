@@ -32,7 +32,7 @@ def _module(device, codec="decoder"):
     return module, int(size.get()[0]), info["multiProcessorCount"]
 
 
-def decode_group(streams, paths):
+def decode_group(streams, paths, *, output="numpy"):
     try:
         import cupy as cp
     except ImportError as error:
@@ -50,16 +50,23 @@ def decode_group(streams, paths):
         for s in streams
     )
     if len(streams) > 1 and required > 0.85 * free:
-        yield from _split_group(streams, paths)
+        yield from _split_group(streams, paths, output)
         return
     try:
-        output, offsets = _launch_decode(
+        pcm_device, offsets = _launch_decode(
             cp, module, stride, multiprocessors, streams, paths
         )
     except cp.cuda.memory.OutOfMemoryError:
         if len(streams) == 1:
             raise
     else:
+        if output == "cupy":
+            for index, stream in enumerate(streams):
+                item = pcm_device[offsets[index] : offsets[index + 1]].reshape(
+                    -1, stream.channels
+                )
+                yield item[stream.skip : stream.end]
+            return
         # Copy bounded groups of consecutive files once; a consumer keeping one
         # view retains at most this transfer (or one very large file).
         start = 0
@@ -69,7 +76,7 @@ def decode_group(streams, paths):
                 end < len(streams) and offsets[end + 1] - offsets[start] <= 16 * 1024**2
             ):
                 end += 1
-            chunk = output[offsets[start] : offsets[end]].get()
+            chunk = pcm_device[offsets[start] : offsets[end]].get()
             for index in range(start, end):
                 stream = streams[index]
                 pos = offsets[index] - offsets[start]
@@ -80,13 +87,13 @@ def decode_group(streams, paths):
             start = end
         return
     # Exit the exception handler first to release the failed launch's traceback.
-    yield from _split_group(streams, paths)
+    yield from _split_group(streams, paths, output)
 
 
-def _split_group(streams, paths):
+def _split_group(streams, paths, output):
     middle = len(streams) // 2
-    yield from decode_group(streams[:middle], paths[:middle])
-    yield from decode_group(streams[middle:], paths[middle:])
+    yield from decode_group(streams[:middle], paths[:middle], output=output)
+    yield from decode_group(streams[middle:], paths[middle:], output=output)
 
 
 def _launch_decode(cp, module, stride, multiprocessors, streams, paths):
