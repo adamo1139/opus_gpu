@@ -107,6 +107,22 @@ RTF is wall time divided by decoded audio duration. Lower is faster. The 1 s CUD
 python benchmarks/compare_durations.py
 ```
 
+### Sustained CUDA decoding
+
+The RTX 5080 decoded 100 batches of 1,024 ten-second clips in 321.103 s. The run processed 102,400 files at 318.9 files/s and 3,189× real time (RTF 0.000314). It returned PCM to host memory. The 3.698 s warmup was measured separately. The workload reused a batch of four synthetic Opus profiles.
+
+```bash
+python benchmarks/compare_batches.py --backend cuda
+```
+
+### Sustained CUDA encoding
+
+The RTX 5080 encoded 30 batches of 1,024 ten-second clips in 96.448 s. It processed 30,720 clips at 318.5 clips/s and 3,185.1× real time (RTF 0.000314), producing 2,491,729,920 bytes of Ogg Opus in host memory. The workload used synthetic 48 kHz PCM prepared in RAM, 64 kb/s CBR and complexity 5. Timing includes transfers, CUDA encoding and Ogg framing. Warmup took 40.532 s and was measured separately.
+
+```bash
+python benchmarks/encode_batches.py --batches 30
+```
+
 ### Earlier decoder baseline
 
 On a corpus of 2,048 files made from four short Opus clips, the RTX 5080 completed a CUDA run in 3.223 s (635 files/s). The i7-11700K completed a four-worker CPU run in 1.717 s (1,193 files/s). Both CLI runs used batches of 64 and returned PCM to host memory without writing WAV files.
