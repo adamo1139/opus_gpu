@@ -72,3 +72,31 @@ def test_cuda_encoder(tmp_path):
                     assert (
                         np.corrcoef(pcm[:, channel], reference[:, channel])[0, 1] > 0.98
                     )
+
+
+def test_encoder_retries_smaller_batches(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from opus_gpu import _encode
+
+    runtime = SimpleNamespace(
+        getDevice=lambda: 0,
+        memGetInfo=lambda: (2**30, 2**30),
+    )
+    cuda = SimpleNamespace(
+        runtime=runtime, memory=SimpleNamespace(OutOfMemoryError=MemoryError)
+    )
+    monkeypatch.setitem(sys.modules, "cupy", SimpleNamespace(cuda=cuda))
+    monkeypatch.setattr(_encode, "_module", lambda *args: (None, 1, 1))
+    monkeypatch.setattr(_encode, "_ensure_stack", lambda *args: None)
+
+    def launch(cp, module, stride, sms, group, *args):
+        if len(group) > 1:
+            raise MemoryError
+        return np.array([[0xF8, 0xFF, 0xFE]], dtype=np.uint8), [3]
+
+    monkeypatch.setattr(_encode, "_launch_encode", launch)
+    inputs = [np.zeros(frames, dtype=np.int16) for frames in (8, 23, 71)]
+    streams = [_parse(blob) for blob in encode_many(inputs)]
+    assert [stream.end - stream.skip for stream in streams] == [8, 23, 71]

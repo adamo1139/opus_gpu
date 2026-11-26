@@ -75,11 +75,54 @@ def _encode_group(group, bitrate, complexity):
         accumulate((n * c * _FRAME for n, c in zip(counts, channels)), initial=0)
     )
     need = offsets[-1] * 2 + starts[-1] * (capacity + 4) + count * stride
-    if count > 1 and need > 0.85 * cp.cuda.runtime.memGetInfo()[0]:
-        mid = count // 2
-        yield from _encode_group(group[:mid], bitrate, complexity)
-        yield from _encode_group(group[mid:], bitrate, complexity)
-        return
+    if count == 1 or need <= 0.85 * cp.cuda.runtime.memGetInfo()[0]:
+        try:
+            data, sizes = _launch_encode(
+                cp,
+                module,
+                stride,
+                sms,
+                group,
+                bitrate,
+                complexity,
+                capacity,
+                channels,
+                starts,
+                offsets,
+            )
+        except cp.cuda.memory.OutOfMemoryError as error:
+            if count == 1:
+                raise RuntimeError(
+                    "CUDA ran out of memory encoding a single clip"
+                ) from error
+        else:
+            for i, pcm in enumerate(group):
+                parts = [
+                    memoryview(data[j, : sizes[j]])
+                    for j in range(starts[i], starts[i + 1])
+                ]
+                yield _mux(parts, len(pcm), channels[i])
+
+            return
+    mid = count // 2
+    yield from _encode_group(group[:mid], bitrate, complexity)
+    yield from _encode_group(group[mid:], bitrate, complexity)
+
+
+def _launch_encode(
+    cp,
+    module,
+    stride,
+    sms,
+    group,
+    bitrate,
+    complexity,
+    capacity,
+    channels,
+    starts,
+    offsets,
+):
+    count = len(group)
     padded = np.zeros(offsets[-1], dtype=np.int16)
     for i, pcm in enumerate(group):
         padded[offsets[i] : offsets[i] + pcm.size].reshape(pcm.shape)[:] = pcm
@@ -108,13 +151,7 @@ def _encode_group(group, bitrate, complexity):
     status = errors.get()
     for i in np.flatnonzero(status):
         raise ValueError(f"Opus encode item {i}: libopus error {status[i]}")
-    sizes = lengths.get()
-    data = packets.get()
-    for i, pcm in enumerate(group):
-        parts = [
-            memoryview(data[j, : sizes[j]]) for j in range(starts[i], starts[i + 1])
-        ]
-        yield _mux(parts, len(pcm), channels[i])
+    return packets.get(), lengths.get()
 
 
 def encode_many(inputs, *, bitrate=64000, complexity=5, batch_size=64):

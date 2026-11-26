@@ -30,7 +30,7 @@ The CUDA encoder accepts 48 kHz mono/stereo signed 16-bit PCM WAVs. It writes on
 python -m opus_gpu.encode_wav ./wav --output ./encoded --batch-size 64 --bitrate 64000
 ```
 
-In Python, `encode(pcm)` returns Ogg Opus bytes and `encode_many(arrays)` yields one byte string per input in order. Set `bitrate` in bits/second and `complexity` from 0 to 10. The fixed-point libopus encoder runs on CUDA. The host handles WAV input and Ogg framing.
+In Python, `encode(pcm)` returns Ogg Opus bytes and `encode_many(arrays)` yields one byte string per input in order. Set `bitrate` in bits/second and `complexity` from 0 to 10. The encoder splits batches if CUDA runs low on memory. The fixed-point libopus encoder runs on CUDA. The host handles WAV input and Ogg framing.
 
 ## Python
 
@@ -73,6 +73,10 @@ The CPU decoder ran with one worker. Linux CPU affinity restricted the process a
 ```bash
 taskset -c 3 python benchmarks/compare_durations.py --backend cpu --cpu-workers 1
 ```
+
+### Warm runs on 1 s clips
+
+With 256 files in one batch, the median of three runs after one warmup was 0.646252 s on one pinned CPU thread and 0.258463 s on the RTX 5080. CUDA reached 990.5× real time (RTF 0.001010) and was 2.50× faster. A fresh CUDA CLI process with the driver cache already warm took 0.713 s.
 
 ### Four-worker CPU baseline
 
