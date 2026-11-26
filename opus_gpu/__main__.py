@@ -14,7 +14,7 @@ from . import SAMPLE_RATE, decode_many
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "source", type=Path, help="file or directory containing .opus files"
+        "source", type=Path, help="file or directory containing .opus or .ogg files"
     )
     parser.add_argument(
         "--output",
@@ -26,7 +26,15 @@ def main():
     parser.add_argument("--workers", type=int)
     args = parser.parse_args()
     directory = args.source.is_dir()
-    paths = args.source.rglob("*.opus") if directory else [args.source]
+    paths = (
+        (
+            path
+            for path in args.source.rglob("*")
+            if path.suffix.lower() in {".opus", ".ogg"} and path.is_file()
+        )
+        if directory
+        else [args.source]
+    )
     start = perf_counter()
     last_report = start
     count = samples = 0
@@ -70,7 +78,7 @@ def main():
     except (RuntimeError, ValueError, OSError) as error:
         parser.exit(1, f"{error}\n")
     if not count:
-        parser.exit(1, "No .opus files found\n")
+        parser.exit(1, "No .opus or .ogg files found\n")
     elapsed = perf_counter() - start
     print(
         f"{args.backend}: {count} files in {elapsed:.3f}s, {count / elapsed:.1f} files/s, "

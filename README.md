@@ -13,7 +13,7 @@ python -m pip install '.[cuda12]'
 python -m opus_gpu ./clips --backend cuda --output ./wav
 ```
 
-The command finds `.opus` files recursively and writes a WAV for each one, preserving the directory structure. A single file is also accepted. Omit `--output` to measure decode throughput including file reads, host/device transfers, and returning PCM to the host. To compare the CPU and GPU on your corpus:
+The command finds `.opus` and `.ogg` files recursively (with Opus audio) and writes a WAV for each one, preserving the directory structure. A single file is also accepted. Omit `--output` to measure decode throughput including file reads, host/device transfers, and returning PCM to the host. To compare the CPU and GPU on your corpus:
 
 ```bash
 python -m opus_gpu ./clips --backend cpu
